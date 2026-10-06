@@ -1,0 +1,2 @@
+Set-Location "C:\Users\sarav\Downloads\public-transport-demand-prediction\public-transport-demand-prediction"
+& "C:\Users\sarav\Downloads\public-transport-demand-prediction\.venv\Scripts\python.exe" -m streamlit run app\app.py

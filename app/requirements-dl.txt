@@ -1,0 +1,7 @@
+# Optional — only needed for Phase 6 (src/train_dl.py, notebooks/05_deep_learning.ipynb).
+# Phase 6 is explicitly optional in the brief; skip this file entirely if
+# your timeline/hardware doesn't have room for it.
+#
+#   pip install -r requirements-dl.txt
+
+tensorflow>=2.16
