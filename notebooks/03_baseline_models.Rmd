@@ -1,0 +1,143 @@
+---
+title: "Phase 4 — Baseline Models"
+subtitle: "Naive / Seasonal Naive / ETS / ARIMA / Prophet, per mode"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(tsibble)
+library(fable)
+library(fable.prophet)
+library(fabletools)
+library(lubridate)
+
+clean_path <- here::here("data", "processed", "clean_v1.csv")
+stopifnot(file.exists(clean_path))
+
+df <- read_csv(clean_path, show_col_types = FALSE) %>%
+  mutate(service_date = as_date(service_date))
+
+rides_tsbl <- df %>%
+  as_tsibble(index = service_date, key = mode) %>%
+  fill_gaps()
+```
+
+## 1. Reproduce the SAME held-out window Python uses
+
+`src/features.py::time_based_split` defines `test_start = max_date -
+TEST_WEEKS + 1 day` with `TEST_WEEKS = 10`, `VAL_WEEKS = 6`. We replicate
+that arithmetic here (not the val cut — baselines like ETS/ARIMA/Prophet
+select their own structure via AICc/internal CV rather than needing a
+separate validation set the way Phase 5's hyperparameter search does, so
+they're trained on everything before the test window).
+
+```{r split}
+TEST_WEEKS <- 10
+
+max_date <- max(rides_tsbl$service_date, na.rm = TRUE)
+test_start <- max_date - weeks(TEST_WEEKS) + days(1)
+
+train_tsbl <- rides_tsbl %>% filter(service_date < test_start)
+test_tsbl  <- rides_tsbl %>% filter(service_date >= test_start)
+
+cat("Test window:", format(test_start), "to", format(max_date), "\n")
+```
+
+## 2. Fit all five baselines, per mode, in one mable
+
+```{r fit}
+fit_time <- system.time({
+  fit <- train_tsbl %>%
+    model(
+      naive  = NAIVE(rides),
+      snaive = SNAIVE(rides ~ lag("week")),
+      ets    = ETS(rides),
+      arima  = ARIMA(rides),
+      # Weekly + annual Fourier terms via Prophet's own seasonality args.
+      # If Phase 2's EDA didn't show a visible annual pattern for a given
+      # mode, this term will just come out near-zero — harmless to leave in.
+      prophet = prophet(rides ~ season(period = 7, order = 3) +
+                                 season(period = 365.25, order = 6))
+    )
+})["elapsed"]
+
+fit
+```
+
+## 3. Forecast into the test window and score
+
+```{r forecast-and-score}
+fc_time <- system.time({
+  fc <- fit %>% forecast(new_data = test_tsbl)
+})["elapsed"]
+
+fc_tbl <- fc %>%
+  as_tibble() %>%
+  select(mode, .model, service_date, .mean)
+
+actual_tbl <- test_tsbl %>%
+  as_tibble() %>%
+  select(mode, service_date, rides)
+
+joined <- fc_tbl %>% left_join(actual_tbl, by = c("mode", "service_date"))
+
+# NOTE: fit_time / fc_time are measured for the WHOLE batch of 5 models
+# together (one model() / forecast() call fits all keys x all formulas at
+# once) rather than per individual model — separating that out isn't the
+# point of the baseline phase. Take these as "cost to produce all five
+# baselines", not a per-model number; Phase 5/6 report true per-model times.
+metrics <- joined %>%
+  group_by(mode, .model) %>%
+  summarise(
+    MAE   = mean(abs(rides - .mean)),
+    RMSE  = sqrt(mean((rides - .mean) ^ 2)),
+    MAPE  = mean(abs((rides - .mean) / rides)) * 100,
+    sMAPE = mean(2 * abs(rides - .mean) / (abs(rides) + abs(.mean))) * 100,
+    .groups = "drop"
+  ) %>%
+  rename(model = .model) %>%
+  mutate(
+    training_time_s   = round(as.numeric(fit_time), 3),
+    inference_time_s  = round(as.numeric(fc_time), 4),
+    interpretability  = case_when(
+      model == "naive"   ~ "high (trivial, no parameters)",
+      model == "snaive"  ~ "high (trivial, seasonal lag only)",
+      model == "ets"     ~ "high (well-understood exponential-smoothing components)",
+      model == "arima"   ~ "high (interpretable AR/MA/seasonal terms)",
+      model == "prophet" ~ "medium (interpretable trend/seasonality decomposition)",
+      TRUE ~ NA_character_
+    )
+  )
+
+metrics %>% arrange(mode, RMSE) %>% knitr::kable(digits = 2)
+```
+
+This is the "line in the sand" table — every model in Phases 5-6 needs to
+beat the best row here per mode to justify its added complexity.
+
+## 4. Save for Phase 7 consolidation
+
+```{r save}
+out_path <- here::here("reports", "baseline_metrics.csv")
+dir.create(dirname(out_path), showWarnings = FALSE, recursive = TRUE)
+write_csv(metrics, out_path)
+cat("Saved ->", out_path, "\n")
+```
+
+## 5. Residual diagnostics (pick your best baseline per mode)
+
+```{r residuals}
+fit %>%
+  select(mode, ets) %>%
+  filter(mode == "total") %>%
+  gg_tsresiduals() +
+  labs(title = "ETS residual diagnostics — total ridership")
+```
+
+Look for: residual autocorrelation left in the ACF (suggests the model
+hasn't captured all the structure), and whether residuals look roughly
+normal (Ljung-Box test via `fit %>% augment() %>% features(.innov,
+ljung_box, lag = 14)` if you want a formal test to report).

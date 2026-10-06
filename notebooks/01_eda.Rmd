@@ -1,0 +1,136 @@
+---
+title: "Phase 2 — Exploratory Data Analysis"
+subtitle: "CTA System-wide Daily Ridership (bus / rail / total)"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                       fig.width = 9, fig.height = 4.5)
+
+library(tidyverse)
+library(tsibble)
+library(feasts)
+library(lubridate)
+
+# Run src/data_prep.py first so this file exists.
+clean_path <- here::here("data", "processed", "clean_v1.csv")
+stopifnot(file.exists(clean_path))
+
+df <- read_csv(clean_path, show_col_types = FALSE) %>%
+  mutate(service_date = as_date(service_date))
+```
+
+## 1. Load as a tsibble
+
+Each `mode` (bus / rail / total) is its own key — this keeps the three
+series distinct throughout `feasts`/`fable` without duplicating code per
+mode.
+
+```{r as-tsibble}
+rides_tsbl <- df %>%
+  as_tsibble(index = service_date, key = mode) %>%
+  fill_gaps()
+
+rides_tsbl
+```
+
+## 2. Overall trend over time
+
+```{r trend-plot}
+rides_tsbl %>%
+  ggplot(aes(x = service_date, y = rides, color = mode)) +
+  geom_line(alpha = 0.6) +
+  labs(title = "CTA daily ridership, 2001–present", x = NULL, y = "Rides",
+       color = "Mode") +
+  theme_minimal()
+```
+
+**Look for:** the pre-2020 level, the COVID-19 cliff in spring 2020, and
+whether ridership has since recovered, plateaued, or shifted composition
+between bus and rail. This is the kind of structural break the brief asks
+you to name explicitly.
+
+## 3. Day-of-week seasonality
+
+```{r dow-seasonality}
+df %>%
+  mutate(day_of_week = wday(service_date, label = TRUE, week_start = 1)) %>%
+  ggplot(aes(x = day_of_week, y = rides, fill = mode)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  facet_wrap(~mode, scales = "free_y") +
+  labs(title = "Ridership by day of week", x = NULL, y = "Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## 4. Holiday / weekend effects
+
+The raw `day_type` field (W/A/U) already encodes weekday vs. Saturday vs.
+Sunday-or-holiday. Compare distributions directly:
+
+```{r daytype-effect}
+df %>%
+  mutate(day_type = recode(day_type, W = "Weekday", A = "Saturday", U = "Sunday/Holiday")) %>%
+  ggplot(aes(x = day_type, y = rides, fill = mode)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  facet_wrap(~mode, scales = "free_y") +
+  labs(title = "Ridership by CTA day type", x = NULL, y = "Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## 5. Outlier days flagged in Phase 1
+
+`data_prep.py` flags statistically extreme days with a rolling robust
+z-score (documented there — flagged, not dropped). Check whether they
+cluster around known events rather than looking like noise:
+
+```{r outlier-check}
+df %>%
+  filter(is_outlier, mode == "total") %>%
+  arrange(service_date) %>%
+  select(service_date, day_type, rides) %>%
+  head(20)
+```
+
+## 6. Stationarity: ACF / PACF and a unit-root test
+
+Using the `total` series as the representative one (bus and rail move
+together closely enough that checking all three rarely changes the
+conclusion — note in your write-up if that's not the case for your run).
+
+```{r acf-pacf}
+total_tsbl <- rides_tsbl %>% filter(mode == "total")
+
+total_tsbl %>%
+  ACF(rides, lag_max = 28) %>%
+  autoplot() + labs(title = "ACF — total ridership")
+
+total_tsbl %>%
+  PACF(rides, lag_max = 28) %>%
+  autoplot() + labs(title = "PACF — total ridership")
+```
+
+```{r unit-root}
+total_tsbl %>%
+  features(rides, unitroot_kpss)
+
+total_tsbl %>%
+  features(rides, unitroot_ndiffs)
+```
+
+`unitroot_kpss` p-value below 0.05 suggests the series is NOT
+stationary (rejects the null of stationarity); `unitroot_ndiffs` gives the
+number of first differences KPSS suggests you'd need to reach stationarity.
+
+## 7. Interpreting the diagnostics
+
+Use the plots and test output above to describe the behavior in the data
+snapshot you loaded. Check whether weekly patterns are visible, how
+ridership changes around 2020 and afterward, what the KPSS and differencing
+tests suggest, and whether flagged outliers align with dates worth
+investigating. These diagnostics describe this dataset; they do not
+establish that any one forecasting model will perform best. Compare model
+choices against the held-out results from
+`notebooks/03_baseline_models.Rmd` and the Python training pipeline.
