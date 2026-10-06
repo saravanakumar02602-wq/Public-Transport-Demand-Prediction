@@ -1,0 +1,104 @@
+---
+title: "Public Transport Demand Prediction"
+subtitle: "CTA Daily Ridership Forecasting — Project Report"
+date: 2026-10-06
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+## Executive summary
+
+This project builds a reproducible forecasting pipeline for daily Chicago
+Transit Authority (CTA) system-wide bus, rail, and combined ridership. The
+Python machine-learning evaluation compares Random Forest and XGBoost on a
+chronologically held-out 10-week test period. Random Forest achieved the
+lowest RMSE among those two tested machine-learning models for all three
+modes. These results do not include the statistical baselines or optional
+LSTM experiment, so they do not establish that Random Forest is the best
+model across every approach.
+
+## Problem and scope
+
+The project forecasts next-day ridership separately for bus, rail, and
+combined boardings. Reliable demand estimates can help transit planners
+understand recent demand patterns and support planning discussions.
+Forecasts are system-wide by mode; they are not route- or station-level
+predictions.
+
+## Data
+
+The input is the CTA's [Ridership – Daily Boarding Totals dataset](https://data.cityofchicago.org/Transportation/CTA-Ridership-Daily-Boarding-Totals/6iiy-9s97)
+from the Chicago Data Portal. The processed snapshot used for the reported
+metrics covers **2001-01-01 through 2026-06-30**. Each source date is
+reshaped into bus, rail, and total observations. Missing calendar dates are
+represented explicitly; missing targets are excluded from model features.
+Potential outliers are flagged for inspection rather than automatically
+removed.
+
+## Method
+
+The feature pipeline creates lags of 1, 2, and 7 days; 7-, 14-, and
+28-day rolling means and standard deviations; calendar and cyclical date
+features; and a United States/Illinois holiday indicator. Lag and rolling
+features use prior observations only.
+
+Data is split chronologically rather than randomly. The last 10 weeks are
+held out for testing, with the preceding 6 weeks used as validation for
+the Python machine-learning workflow. Random Forest and XGBoost
+hyperparameters are selected with `TimeSeriesSplit`. The test window for
+the reported snapshot is **2026-04-22 through 2026-06-30**.
+
+## Machine-learning results
+
+| Mode | Best of evaluated ML models | MAE (rides) | RMSE (rides) | MAPE |
+|---|---|---:|---:|---:|
+| Bus | Random Forest | 26,705.9 | 34,375.5 | 4.81% |
+| Rail | Random Forest | 20,009.8 | 27,254.8 | 5.18% |
+| Total | Random Forest | 46,210.5 | 59,673.3 | 4.87% |
+
+The values are from [`ml_metrics.csv`](ml_metrics.csv). Random Forest
+outperformed XGBoost by RMSE for each mode in this saved evaluation.
+These results are tied to this data snapshot and holdout window; they are
+not a guarantee of future accuracy. The statistical baseline notebook and
+optional LSTM script are part of the repository, but their scores are not
+included in this table.
+
+## Dashboard
+
+The Streamlit dashboard displays historical actual-versus-predicted
+ridership and iterative short-horizon forecasts for the available trained
+Random Forest and XGBoost models. Its widening forecast band is a
+heuristic based on held-out RMSE, not a calibrated prediction interval.
+The optional LSTM uses a different input format and is not served by the
+dashboard.
+
+## Limitations and next steps
+
+- The dataset is system-wide, not route- or station-level.
+- The current model does not include weather, service disruptions,
+  special events, or other external drivers of demand.
+- The training history spans major structural changes, including the
+  COVID-19 ridership disruption; historical patterns may not represent
+  future service conditions.
+- The RMSE-based dashboard band is illustrative and does not quantify
+  calibrated forecast uncertainty.
+- Run the R baseline notebook and optional LSTM experiment on the same
+  data snapshot before making a cross-family model-selection claim.
+- Further work could add external covariates, evaluate per-route data,
+  and use probabilistic forecasting methods.
+
+## Reproducing the Python results
+
+From the project root, install the core dependencies and run:
+
+```bash
+python -m src.data_prep
+python -m src.features
+python -m src.train_ml
+python -m src.evaluate
+```
+
+See the project [README](../README.md) for environment setup and dashboard
+instructions.

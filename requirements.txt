@@ -1,0 +1,35 @@
+# Core dependencies for Phases 1, 3, 5, 7, 8 (everything except the
+# optional Phase 6 deep-learning model — see requirements-dl.txt for that).
+#
+#   python -m venv .venv
+#   source .venv/bin/activate        
+#   pip install -r requirements.txt
+
+# Data wrangling / IO
+pandas>=2.2
+numpy>=1.26
+requests>=2.31
+
+# Feature engineering
+holidays>=0.47
+
+# Phase 5 — classical ML
+scikit-learn>=1.4
+xgboost>=2.0
+shap>=0.45
+joblib>=1.3
+
+# Statistics helper (optional, handy for ad-hoc checks on the Python side)
+statsmodels>=0.14
+
+# Plotting
+matplotlib>=3.8
+seaborn>=0.13
+plotly>=5.20
+
+# Notebooks
+jupyter>=1.0
+notebook>=7.1
+
+# Phase 8 — dashboard
+streamlit>=1.49
